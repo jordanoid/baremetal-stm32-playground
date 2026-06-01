@@ -4,7 +4,68 @@ This repository contains custom bare-metal peripheral drivers for the STM32F411C
 
 Below is the documentation for the provided libraries located in the `lib/` directory.
 
-## 1. Timer (`lib/Timer`)
+## 1. RCC (`lib/RCC`)
+A clock configuration driver that transitions the STM32F411 from its default 16 MHz internal oscillator (HSI) to a high-speed **96 MHz** clock using the 25 MHz external crystal (HSE).
+
+### PLL Clock Equations
+The system clock (SYSCLK) and USB clock (USBCLK) are derived from the external HSE crystal using the following Phase-Locked Loop (PLL) equations:
+
+### PLL Clock Equations & Design Guidelines
+The system clock (SYSCLK) is derived from the external HSE crystal using the following register-level formula:
+
+$$\text{SYSCLK} = \frac{\text{HSE}}{\text{PLLM}} \times \frac{\text{PLLN}}{\text{PLLP}}$$
+
+To configure the PLL for any target system clock ($f_{\text{SYSCLK}}$) and USB clock ($f_{\text{USB}}$), use the following design equations and constraints:
+
+1. **Set $M$ (VCO Input Divider):**
+   Divide $f_{\text{HSE}}$ to achieve a $1\text{ MHz}$ input clock to the PLL VCO (allowed range: $1\text{ MHz} \le f_{\text{VCO\_IN}} \le 2\text{ MHz}$):
+   $$M = \frac{f_{\text{HSE}}}{1\text{ MHz}} \quad \implies \quad f_{\text{VCO\_IN}} = 1\text{ MHz}$$
+   *(For the 25 MHz crystal, setting $M = 25$ gives exactly $1\text{ MHz}$.)*
+
+2. **Determine $N$ and $P$ (SYSCLK Multiplication & Division):**
+   Select a division factor $P \in \{2, 4, 6, 8\}$ and calculate the multiplier $N$ such that:
+   $$N = P \times \frac{f_{\text{SYSCLK\_target}}}{1\text{ MHz}}$$
+   *Constraint:* The multiplier $N$ must be an integer, and the resulting VCO output frequency $f_{\text{VCO\_OUT}}$ must satisfy:
+   $$100\text{ MHz} \le (1\text{ MHz} \times N) \le 432\text{ MHz} \quad \implies \quad 100 \le N \le 432$$
+
+3. **Determine $Q$ (USB Prescaler, optional):**
+   For USB operation, the USB peripheral requires a precise $48\text{ MHz}$ clock. Thus, $N$ must be a multiple of 48:
+   $$Q = \frac{N}{48} \quad \implies \quad Q \in \{2, 3, \dots, 15\} \text{ (must be an integer)}$$
+
+---
+
+### Step-by-Step Calculation for a 96 MHz Target SYSCLK:
+Using the BlackPill's **25 MHz HSE** crystal ($f_{\text{HSE}} = 25\text{ MHz}$):
+1. **Calculate $M$:**
+   $$M = \frac{25\text{ MHz}}{1\text{ MHz}} = 25$$
+2. **Select $P$ and Calculate $N$:**
+   If we choose $P = 2$:
+   $$N = 2 \times \frac{96\text{ MHz}}{1\text{ MHz}} = 192$$
+   *Check constraints:* $192$ is within the $100 \le N \le 432$ range. (Valid!)
+3. **Calculate $Q$ for USB (48 MHz):**
+   $$Q = \frac{192}{48} = 4 \quad \text{(Valid integer!)}$$
+
+---
+
+### Features
+- Configures the main PLL parameters: $M = 25$, $N = 192$, $P = 2$, $Q = 4$ to achieve a 96 MHz system clock and a 48 MHz USB clock.
+- Sets Flash latency to 3 wait states (`FLASH_ACR_LATENCY_3WS`) to support 96 MHz execution.
+- Enables speed-up caches: Instruction Cache, Data Cache, and Prefetch Buffer.
+- Configures bus prescalers: AHB = 1 (96 MHz), APB1 = 2 (48 MHz), and APB2 = 1 (96 MHz).
+
+### Function Blocks & API
+- **`void rcc_system_init(void)`**
+  - **Purpose:** Configures the clock system to run at 96 MHz using the external HSE oscillator.
+  - **Hardware Interaction:**
+    - Enables HSE and waits for stability (`HSERDY`).
+    - Configures PWR regulator to Voltage Scale 1 to allow running at high frequencies.
+    - Sets flash wait states and enables the caches.
+    - Safely clears and updates `RCC->CFGR` for bus dividers.
+    - Configures, enables, and switches to the main PLL.
+
+---
+
+## 2. Timer (`lib/Timer`)
 A simple timer driver that configures `TIM2` to blink an LED.
 
 ### Features
@@ -12,6 +73,17 @@ A simple timer driver that configures `TIM2` to blink an LED.
 - Uses interrupts (`TIM2_IRQn`) to handle periodic events.
 - Hardcoded to toggle the onboard LED connected to `PC13`.
 - Operates entirely asynchronously in the background once initialized.
+
+### Timer Math & Frequency Equation
+Under the 96 MHz system clock configuration:
+1. **Timer Input Clock:** `TIM2` is connected to the APB1 bus. Since the APB1 prescaler is set to 2 (`PPRE1 = DIV2`), the timer clock frequency is multiplied by 2:
+   $$f_{\text{TIM2\_CLK}} = 2 \times f_{\text{APB1}} = 2 \times 48\text{ MHz} = 96\text{ MHz}$$
+2. **Frequency Equation:**
+   $$\text{Update Frequency} = \frac{f_{\text{TIM2\_CLK}}}{(\text{Prescaler} + 1) \times (\text{Auto-Reload} + 1)}$$
+3. **Calculating for a 500 ms period (2 Hz overflow frequency):**
+   Setting $\text{Prescaler} = 16000 - 1 = 15999$:
+   $$2\text{ Hz} = \frac{96,000,000}{16000 \times (\text{ARR} + 1)}$$
+   $$\text{ARR} + 1 = \frac{96,000,000}{16000 \times 2} = 3000 \implies \text{ARR} = 3000 - 1 = 2999$$
 
 ### Function Blocks & API
 
@@ -21,7 +93,7 @@ A simple timer driver that configures `TIM2` to blink an LED.
   - **Hardware Interaction:** 
     - Enables APB1 clock for `TIM2` and AHB1 clock for `GPIOC`.
     - Configures `PC13` as a General Purpose Output.
-    - Sets `TIM2->PSC` (Prescaler) to `16000` and `TIM2->ARR` (Auto-reload) to `500` to dictate the interrupt frequency.
+    - Sets `TIM2->PSC` (Prescaler) to `15999` and `TIM2->ARR` (Auto-reload) to `2999` to yield the 2 Hz toggle rate.
     - Enables the `TIM2_IRQn` update interrupt in the NVIC and starts the counter (`TIM_CR1_CEN`).
 
 #### Interrupt Handlers
@@ -29,7 +101,9 @@ A simple timer driver that configures `TIM2` to blink an LED.
   - **Purpose:** Handles the periodic timer overflow.
   - **Logic:** Checks the Update Interrupt Flag (`UIF`), clears it to acknowledge the interrupt, and toggles the `PC13` output data register (`ODR`) to blink the LED.
 
-## 2. UART DMA Driver (`lib/UART_DMA_Driver`)
+---
+
+## 3. UART DMA Driver (`lib/UART_DMA_Driver`)
 A robust, non-blocking UART driver using DMA (Direct Memory Access) for both transmission (TX) and reception (RX) on `USART1`.
 
 ### Features
@@ -37,6 +111,30 @@ A robust, non-blocking UART driver using DMA (Direct Memory Access) for both tra
 - **Efficient Reception**: Utilizes a circular hardware DMA buffer (2048 bytes) combined with a software application ring buffer (2048 bytes).
 - **Variable-length RX Handling**: Implements the `USART_IDLE` line interrupt along with DMA Half-Transfer (HT) and Transfer-Complete (TC) interrupts. This guarantees that received data is parsed instantly, even if it doesn't fill the entire DMA buffer.
 - **Hardware Map**: Uses `USART1` mapped to `PA9` (TX) and `PA10` (RX) with a baud rate of 115200.
+
+### Baud Rate Configuration & Equation
+USART1 is on the APB2 bus. Under the 96 MHz system clock configuration with the APB2 prescaler set to 1, the bus runs at 96 MHz ($f_{\text{CK}} = 96,000,000\text{ Hz}$).
+
+The general formula to calculate the division factor $\text{USARTDIV}$ is:
+
+$$\text{USARTDIV} = \frac{f_{\text{CK}}}{8 \times (2 - \text{OVER8}) \times \text{Baud Rate}}$$
+
+Where:
+- $\text{OVER8}$ is the oversampling mode in the `USART_CR1` register (either `0` for oversampling by 16, or `1` for oversampling by 8).
+
+Since this driver uses oversampling by 16 ($\text{OVER8} = 0$), the formula simplifies to:
+$$\text{USARTDIV} = \frac{f_{\text{CK}}}{16 \times \text{Baud Rate}}$$
+
+To encode this into the `BRR` register, the value must be multiplied by 16 (which effectively shifts the integer part left by 4 bits to make room for the 4 fractional bits):
+
+$$\text{BRR\_value} = \text{USARTDIV} \times 16 = \frac{f_{\text{CK}}}{\text{Baud Rate}}$$
+
+To ensure correct rounding to the nearest integer in C, we add half of the divisor ($\text{Baud Rate} / 2$) to the numerator before performing integer division:
+
+$$\text{BRR\_value} = \frac{f_{\text{CK}} + (\text{Baud Rate} / 2)}{\text{Baud Rate}}$$
+
+For a target baud rate of **115200**:
+$$\text{BRR\_value} = \frac{96,000,000 + 57600}{115200} \approx 833.8 \rightarrow 833 = \text{0x0341}$$
 
 ### Function Blocks & API
 
@@ -46,11 +144,12 @@ A robust, non-blocking UART driver using DMA (Direct Memory Access) for both tra
   - **Hardware Interaction:**
     - Enables `GPIOA`, `DMA2`, and `USART1` clocks.
     - Configures `PA9` (TX) and `PA10` (RX) to Alternate Function 7 (USART1).
-    - Sets USART1 baud rate to 115200 and enables IDLE line detection interrupt.
+    - Sets USART1 baud rate to 115200 by setting `USART1->BRR = 0x0341`.
+    - Enables the IDLE line detection interrupt.
     - Configures `DMA2_Stream7` (TX) for Memory-to-Peripheral transfers.
     - Configures `DMA2_Stream2` (RX) in Circular mode for Peripheral-to-Memory transfers.
     - Enables all relevant NVIC interrupts with RX prioritized over TX.
-    
+
 - **`void uart_send_string(const char *str)`**
   - **Purpose:** Non-blocking function to send a string.
   - **Logic:** Temporarily disables interrupts to protect the buffer state, copies characters into the software `tx_ring`, and calls `start_tx_dma_chunk()` if a DMA transfer is not already actively running.

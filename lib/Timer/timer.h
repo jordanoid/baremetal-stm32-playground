@@ -5,5 +5,6 @@
 #include <stdint.h>
 
 void timer2_led_init(void);
+void timer5_adc_init(void);
 
 #endif // TIMER_H

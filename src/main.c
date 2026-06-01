@@ -1,10 +1,12 @@
 #include "stm32f4xx.h"
+#include "rcc.h"
 #include "uart_dma.h"
 #include "timer.h"
 
 #define STR_BUFFER_SIZE 2048
 
 int main(void) {
+    rcc_system_init();
     timer2_led_init();
     uart_dma_system_init();
     

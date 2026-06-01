@@ -26,12 +26,12 @@ void uart_dma_system_init(void) {
     RCC->APB2ENR |= RCC_APB2ENR_USART1EN;
 
     // Configure PA9 (TX) and PA10 (RX) for USART1
-    GPIOA->MODER &= ~((3U << (9 * 2)) | (3U << (10 * 2)));
-    GPIOA->MODER |= (2U << (9 * 2)) | (2U << (10 * 2));
-    GPIOA->AFR[1] |= (7U << ((9 - 8) * 4)) | (7U << ((10 - 8) * 4));
+    GPIOA->MODER &= ~(GPIO_MODER_MODE9 | GPIO_MODER_MODE10);
+    GPIOA->MODER |= (GPIO_MODER_MODE9_1 | GPIO_MODER_MODE10_1); // Alternate function
+    GPIOA->AFR[1] |= ((7U << GPIO_AFRH_AFSEL9_Pos) | (7U << GPIO_AFRH_AFSEL10_Pos));
 
     // Configure USART1: 115200 baud, 8N1, Enable USART, TX, RX, and IDLE interrupt
-    USART1->BRR = 0x008B; 
+    USART1->BRR = 0x0341; // 115200 baud at 96MHz clock (USARTDIV = 96MHz/115200 ≈ 833.33, BRR = 833 = 0x0341)
     USART1->CR1 &= ~(USART_CR1_OVER8 | USART_CR1_M | USART_CR1_PCE);
     USART1->CR1 |= (USART_CR1_UE | USART_CR1_TE | USART_CR1_RE | USART_CR1_IDLEIE);
     USART1->CR3 |= USART_CR3_DMAT | USART_CR3_DMAR;
@@ -61,19 +61,23 @@ void uart_dma_system_init(void) {
 void uart_send_string(const char *str) {
     int idx = 0;
     
-    __disable_irq(); 
-    
     while(str[idx] != '\0') {
+        uint16_t next_head = (tx_head + 1) % TX_RING_SIZE;
+        
+        while (next_head == tx_tail){
+            __NOP(); // Wait for space in the ring buffer
+        }
+
         tx_ring[tx_head] = str[idx];
-        tx_head = (tx_head + 1) % TX_RING_SIZE;
+        tx_head = next_head;
         idx++;
+
+        if (!(DMA2_Stream7->CR & DMA_SxCR_EN)) {
+            start_tx_dma_chunk(); 
+        }
+        
+        __enable_irq(); 
     }
-    
-    if (!(DMA2_Stream7->CR & DMA_SxCR_EN)) {
-        start_tx_dma_chunk(); 
-    }
-    
-    __enable_irq(); 
 }
 
 int16_t uart_read_byte(void) {
@@ -126,7 +130,7 @@ static void process_rx_data(void) {
         uint8_t incoming_byte = rx_buffer[index];
         uint16_t next_app_head = (app_rx_head + 1) % APP_RX_SIZE;
         
-        if (next_app_head != app_rx_tail) { 
+        if (next_app_head != app_rx_tail) {
             app_rx_buffer[app_rx_head] = incoming_byte;
             app_rx_head = next_app_head; 
         }
@@ -157,10 +161,10 @@ void DMA2_Stream2_IRQHandler(void) {
 
 void DMA2_Stream7_IRQHandler(void) {
     if (DMA2->HISR & DMA_HISR_TCIF7) {
-        DMA2->HIFCR = DMA_HIFCR_CTCIF7; 
+        DMA2->HIFCR = DMA_HIFCR_CTCIF7;
 
         if (tx_head != tx_tail) {
-            start_tx_dma_chunk(); 
+            start_tx_dma_chunk();
         }
     }
 }
