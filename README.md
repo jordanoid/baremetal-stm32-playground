@@ -7,9 +7,6 @@ Below is the documentation for the provided libraries located in the `lib/` dire
 ## 1. RCC (`lib/RCC`)
 A clock configuration driver that transitions the STM32F411 from its default 16 MHz internal oscillator (HSI) to a high-speed **96 MHz** clock using the 25 MHz external crystal (HSE).
 
-### PLL Clock Equations
-The system clock (SYSCLK) and USB clock (USBCLK) are derived from the external HSE crystal using the following Phase-Locked Loop (PLL) equations:
-
 ### PLL Clock Equations & Design Guidelines
 The system clock (SYSCLK) is derived from the external HSE crystal using the following register-level formula:
 
@@ -18,14 +15,14 @@ $$\text{SYSCLK} = \frac{\text{HSE}}{\text{PLLM}} \times \frac{\text{PLLN}}{\text
 To configure the PLL for any target system clock ($f_{\text{SYSCLK}}$) and USB clock ($f_{\text{USB}}$), use the following design equations and constraints:
 
 1. **Set $M$ (VCO Input Divider):**
-   Divide $f_{\text{HSE}}$ to achieve a $1\text{ MHz}$ input clock to the PLL VCO (allowed range: $1\text{ MHz} \le f_{\text{VCO\_IN}} \le 2\text{ MHz}$):
-   $$M = \frac{f_{\text{HSE}}}{1\text{ MHz}} \quad \implies \quad f_{\text{VCO\_IN}} = 1\text{ MHz}$$
+   Divide $f_{\text{HSE}}$ to achieve a $1\text{ MHz}$ input clock to the PLL VCO (allowed range: $1\text{ MHz} \le f_{\text{VCO-IN}} \le 2\text{ MHz}$):
+   $$M = \frac{f_{\text{HSE}}}{1\text{ MHz}} \quad \implies \quad f_{\text{VCO-IN}} = 1\text{ MHz}$$
    *(For the 25 MHz crystal, setting $M = 25$ gives exactly $1\text{ MHz}$.)*
 
 2. **Determine $N$ and $P$ (SYSCLK Multiplication & Division):**
    Select a division factor $P \in \{2, 4, 6, 8\}$ and calculate the multiplier $N$ such that:
-   $$N = P \times \frac{f_{\text{SYSCLK\_target}}}{1\text{ MHz}}$$
-   *Constraint:* The multiplier $N$ must be an integer, and the resulting VCO output frequency $f_{\text{VCO\_OUT}}$ must satisfy:
+   $$N = P \times \frac{f_{\text{SYSCLK-target}}}{1\text{ MHz}}$$
+   *Constraint:* The multiplier $N$ must be an integer, and the resulting VCO output frequency $f_{\text{VCO-OUT}}$ must satisfy:
    $$100\text{ MHz} \le (1\text{ MHz} \times N) \le 432\text{ MHz} \quad \implies \quad 100 \le N \le 432$$
 
 3. **Determine $Q$ (USB Prescaler, optional):**
@@ -77,9 +74,9 @@ A simple timer driver that configures `TIM2` to blink an LED.
 ### Timer Math & Frequency Equation
 Under the 96 MHz system clock configuration:
 1. **Timer Input Clock:** `TIM2` is connected to the APB1 bus. Since the APB1 prescaler is set to 2 (`PPRE1 = DIV2`), the timer clock frequency is multiplied by 2:
-   $$f_{\text{TIM2\_CLK}} = 2 \times f_{\text{APB1}} = 2 \times 48\text{ MHz} = 96\text{ MHz}$$
+   $$f_{\text{TIM2}} = 2 \times f_{\text{APB1}} = 2 \times 48\text{ MHz} = 96\text{ MHz}$$
 2. **Frequency Equation:**
-   $$\text{Update Frequency} = \frac{f_{\text{TIM2\_CLK}}}{(\text{Prescaler} + 1) \times (\text{Auto-Reload} + 1)}$$
+   $$\text{Update Frequency} = \frac{f_{\text{TIM2}}}{(\text{Prescaler} + 1) \times (\text{Auto-Reload} + 1)}$$
 3. **Calculating for a 500 ms period (2 Hz overflow frequency):**
    Setting $\text{Prescaler} = 16000 - 1 = 15999$:
    $$2\text{ Hz} = \frac{96,000,000}{16000 \times (\text{ARR} + 1)}$$
@@ -127,14 +124,14 @@ $$\text{USARTDIV} = \frac{f_{\text{CK}}}{16 \times \text{Baud Rate}}$$
 
 To encode this into the `BRR` register, the value must be multiplied by 16 (which effectively shifts the integer part left by 4 bits to make room for the 4 fractional bits):
 
-$$\text{BRR\_value} = \text{USARTDIV} \times 16 = \frac{f_{\text{CK}}}{\text{Baud Rate}}$$
+$$\text{BRR} = \text{USARTDIV} \times 16 = \frac{f_{\text{CK}}}{\text{Baud Rate}}$$
 
 To ensure correct rounding to the nearest integer in C, we add half of the divisor ($\text{Baud Rate} / 2$) to the numerator before performing integer division:
 
-$$\text{BRR\_value} = \frac{f_{\text{CK}} + (\text{Baud Rate} / 2)}{\text{Baud Rate}}$$
+$$\text{BRR} = \frac{f_{\text{CK}} + (\text{Baud Rate} / 2)}{\text{Baud Rate}}$$
 
 For a target baud rate of **115200**:
-$$\text{BRR\_value} = \frac{96,000,000 + 57600}{115200} \approx 833.8 \rightarrow 833 = \text{0x0341}$$
+$$\text{BRR} = \frac{96,000,000 + 57600}{115200} \approx 833.8 \rightarrow 833 = \text{0x0341}$$
 
 ### Function Blocks & API
 
